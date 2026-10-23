@@ -61,6 +61,10 @@ def _mtp_quant_config(quant_config):
         # MIXED_PRECISION lists mtp.* layers only when the MTP head is quantized.
         if any(name.startswith("mtp.") for name in quant_config.quantized_layers):
             return quant_config
+        if envs.SGLANG_QWEN35_MTP_ONLINE_FP8.get():
+            from sglang.srt.layers.quantization.fp8 import Fp8Config
+
+            return Fp8Config(is_checkpoint_fp8_serialized=False)
         return None
     if quant_config and (
         quant_config.get_name() == "modelopt_fp4"
