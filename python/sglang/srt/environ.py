@@ -1451,6 +1451,9 @@ class Envs:
     SGLANG_IMAGE_MAX_PIXELS = EnvInt(16384 * 28 * 28)
     SGLANG_RESIZE_RESAMPLE = EnvStr("")
     SGLANG_MM_BUFFER_SIZE_MB = EnvInt(0)
+    # Device for the tokenizer-side fast image processor (e.g. cpu). Unset means
+    # the model GPU, which creates a CUDA context in the HTTP process.
+    SGLANG_MM_PREPROCESS_DEVICE = EnvStr(None)
     SGLANG_MM_PRECOMPUTE_HASH = EnvBool(False)
     SGLANG_VIT_ENABLE_CUDA_GRAPH = EnvBool(False)
     # Use the fully-vectorized ViT position-embedding interpolation (no per-image

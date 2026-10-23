@@ -5,6 +5,13 @@ import os
 import sys
 import warnings
 
+if __name__ == "__main__":
+    # Before any import that probes the GPU; spawned workers import this module
+    # as __mp_main__ and keep the real CUDA queries.
+    from sglang.srt.utils.nvml_device_query import install_nvml_device_queries
+
+    install_nvml_device_queries()
+
 from sglang.srt.arg_groups.overrides import resolving_view
 from sglang.srt.plugins import load_plugins
 from sglang.srt.server_args import prepare_server_args

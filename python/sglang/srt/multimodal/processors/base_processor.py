@@ -485,7 +485,7 @@ class BaseMultimodalProcessor(ABC):
                 f"{type(self._processor).__module__}."
                 f"{type(self._processor).__qualname__}"
             ),
-            "gpu_image_decode": self.gpu_image_decode,
+            "gpu_image_decode": self._effective_gpu_image_decode(),
             "image_processor_backend": self.image_processor_backend,
             "feature_transport": self.mm_feature_transport,
             "image_config": self.image_config,
@@ -775,6 +775,14 @@ class BaseMultimodalProcessor(ABC):
         declared = self.auto_mm_processor_worker_num
         return 2 if declared is None else declared
 
+    @classmethod
+    def _effective_gpu_image_decode(cls):
+        # nvJPEG runs in the tokenizer process; CPU preprocessing must keep it
+        # off the GPU or the decode alone creates a CUDA context there.
+        if envs.SGLANG_MM_PREPROCESS_DEVICE.get() == "cpu":
+            return False
+        return cls.gpu_image_decode
+
     def _fast_image_processor_device(self, processor) -> Optional[str]:
         """The device for the fast image processor, or None to leave it unset.
 
@@ -782,6 +790,8 @@ class BaseMultimodalProcessor(ABC):
         tokenizer process each carry their own ``base_gpu_id``.
         """
         server_args = self.server_args
+        if (device := envs.SGLANG_MM_PREPROCESS_DEVICE.get()) is not None:
+            return device
         if _is_cpu or get_exec().deterministic.rl_on_policy_target is not None:
             return "cpu"
         if _is_xpu:
@@ -988,7 +998,7 @@ class BaseMultimodalProcessor(ABC):
             return data
         try:
             if modality == Modality.IMAGE:
-                img, _ = load_image(data, cls.gpu_image_decode)
+                img, _ = load_image(data, cls._effective_gpu_image_decode())
                 if isinstance(img, torch.Tensor):
                     return img  # JPEG already decoded on GPU by nvJPEG
                 # PIL decodes lazily; do it here in the io worker so the decode

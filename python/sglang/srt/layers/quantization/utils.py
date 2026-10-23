@@ -4,7 +4,10 @@
 
 from __future__ import annotations
 
+import importlib.util
+import os
 import re
+import sys
 from copy import deepcopy
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Dict, List, Mapping, Optional, Tuple, Union
@@ -18,15 +21,36 @@ if TYPE_CHECKING:
     from sglang.srt.layers.quantization.base_config import QuantizationConfig
 
 
+def _load_sgl_kernel_scalar_type():
+    """Load the stdlib-only ``sgl_kernel.scalar_type`` without ``sgl_kernel/__init__``.
+
+    The package init probes the GPU to pick arch-specific ops, which creates a
+    ~600 MB CUDA context in every process that imports quantization configs,
+    including the HTTP/tokenizer process. Registering the submodule first keeps
+    one class identity when the scheduler later imports ``sgl_kernel`` fully.
+    """
+    name = "sgl_kernel.scalar_type"
+    if name in sys.modules:
+        return sys.modules[name]
+    package = importlib.util.find_spec("sgl_kernel")
+    if package is None or package.origin is None:
+        raise ImportError("sgl_kernel is not installed")
+    path = os.path.join(os.path.dirname(package.origin), "scalar_type.py")
+    spec = importlib.util.spec_from_file_location(name, path)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
 def get_scalar_types():
     """
     Returns:
         tuple: (ScalarType, scalar_types)
     """
     try:
-        from sgl_kernel.scalar_type import ScalarType, scalar_types
-
-        return ScalarType, scalar_types
+        module = _load_sgl_kernel_scalar_type()
+        return module.ScalarType, module.scalar_types
     except ImportError:
 
         class MockScalarType:
