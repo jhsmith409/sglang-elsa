@@ -79,7 +79,10 @@ from sglang.srt.speculative.dp_spec_prefill_coordination import (
     DPSpecPrefillCoordinationPlan,
 )
 from sglang.srt.speculative.draft_utils import DraftBackendFactory
-from sglang.srt.speculative.frspec_head import load_hot_lm_head
+from sglang.srt.speculative.frspec_head import (
+    build_quantized_hot_lm_head,
+    load_hot_lm_head,
+)
 from sglang.srt.speculative.eagle_draft_cuda_graph_runner import (
     EAGLEDraftCudaGraphRunner,
 )
@@ -363,12 +366,16 @@ class EagleDraftWorker(EagleDraftWorkerBase):
                     head = head.clone()
                     head.data = head.data[self.hot_token_id]
                 else:
+                    model_path = self.target_worker.model_runner.model_config.model_path
+                    hot_head = build_quantized_hot_lm_head(
+                        target_lm_head, model_path, self.hot_token_id, head.device
+                    )
+                    if hot_head is not None:
+                        self.draft_runner.model.set_lm_head_from_target(hot_head)
+                        self.draft_runner.model.set_embed_and_head(embed, None)
+                        return
                     head = torch.nn.Parameter(
-                        load_hot_lm_head(
-                            self.target_worker.model_runner.model_config.model_path,
-                            self.hot_token_id,
-                            head.device,
-                        ),
+                        load_hot_lm_head(model_path, self.hot_token_id, head.device),
                         requires_grad=False,
                     )
 
