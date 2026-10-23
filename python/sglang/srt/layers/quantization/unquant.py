@@ -49,6 +49,7 @@ from sglang.srt.utils import (
     set_weight_attrs,
     use_intel_amx_backend,
 )
+from sglang.srt.utils.common import is_sm120
 from sglang.srt.utils.custom_op import register_custom_op
 
 if TYPE_CHECKING:
@@ -64,6 +65,12 @@ from sglang.srt.hardware_backend.npu.quantization.moe_methods import (
 
 _is_cpu_amx_available = cpu_has_amx_support()
 _is_cuda = is_cuda()
+_is_sm120 = _is_cuda and is_sm120()
+if _is_sm120:
+    from sglang.kernels.ops.gemm.skinny_bf16_gemm import (
+        skinny_bf16_gemm,
+        use_skinny_bf16_gemm,
+    )
 _is_hip = is_hip()
 _is_cpu = is_cpu()
 _is_npu = is_npu()
@@ -417,6 +424,21 @@ def _can_accumulate_into_addend(
     )
 
 
+def _use_sm120_skinny_gemm(
+    x: torch.Tensor, weight: torch.Tensor, bias: Optional[torch.Tensor]
+) -> bool:
+    return (
+        _is_sm120
+        and bias is None
+        and x.dtype == torch.bfloat16
+        and weight.dtype == torch.bfloat16
+        and x.is_contiguous()
+        and weight.is_contiguous()
+        and not torch.compiler.is_compiling()
+        and use_skinny_bf16_gemm(x.numel() // x.shape[-1], weight.shape[0], weight.shape[1])
+    )
+
+
 def get_bf16_gemm_backend() -> Bf16GemmBackend:
     global _BF16_GEMM_BACKEND
     if _BF16_GEMM_BACKEND is None:
@@ -532,6 +554,9 @@ class UnquantizedLinearMethod(LinearMethodBase):
                 # keeping the per-shape kernel choice.
                 return bf16_gemm_dispatch(x, layer.weight, bias)
             return _bf16_gemm_dispatch_impl(x, layer.weight, bias)
+
+        elif _use_sm120_skinny_gemm(x, layer.weight, bias):
+            return skinny_bf16_gemm(x, layer.weight)
 
         return F.linear(x, layer.weight, bias)
 

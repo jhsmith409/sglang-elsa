@@ -2246,6 +2246,11 @@ class ModelOptNvFp4A16LinearMethod(LinearMethodBase):
         if hasattr(layer, "input_scale"):
             del layer.input_scale
 
+        layer.dequantized_bf16 = _use_sm120_nvfp4a16_bf16(layer)
+        if layer.dequantized_bf16:
+            _dequantize_nvfp4a16_layer_to_bf16(layer)
+            return
+
         if torch.unique(layer.weight_scale_2).numel() != 1:
             logger.warning(
                 "In NVFP4A16 linear, weight_scale_2 differs across fused "
@@ -2272,6 +2277,8 @@ class ModelOptNvFp4A16LinearMethod(LinearMethodBase):
         x: torch.Tensor,
         bias: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
+        if layer.dequantized_bf16:
+            return UnquantizedLinearMethod().apply(layer, x, bias)
         return apply_fp4_marlin_linear(
             input=x,
             weight=layer.weight,
@@ -2282,6 +2289,42 @@ class ModelOptNvFp4A16LinearMethod(LinearMethodBase):
             size_k=layer.input_size_per_partition,
             bias=bias,
         )
+
+
+# Small W4A16 projections (e.g. Qwen3.5 shared experts, ~1-2M elements) spend
+# their Marlin time on launch/tile overhead at decode M; BF16 copies cost ~3.5x
+# the packed bytes but run at the skinny-GEMM floor. Arbitrary cap.
+_SM120_NVFP4A16_BF16_MAX_ELEMS = 4 * 1024 * 1024
+
+
+def _use_sm120_nvfp4a16_bf16(layer: torch.nn.Module) -> bool:
+    return (
+        get_platform().is_sm120
+        and layer.params_dtype == torch.bfloat16
+        and layer.output_size_per_partition * layer.input_size_per_partition
+        <= _SM120_NVFP4A16_BF16_MAX_ELEMS
+    )
+
+
+def _dequantize_nvfp4a16_layer_to_bf16(layer: torch.nn.Module) -> None:
+    """W4A16 computes in BF16 anyway, so a BF16 copy is numerically exact."""
+    from sglang.srt.layers.quantization.dequantization import dequantize_nvfp4
+
+    parts = []
+    offset = 0
+    for i, width in enumerate(layer.logical_widths):
+        parts.append(
+            dequantize_nvfp4(
+                layer.weight.data[offset : offset + width],
+                layer.weight_scale.data[offset : offset + width],
+                layer.weight_scale_2.data[i],
+                out_dtype=torch.bfloat16,
+            )
+        )
+        offset += width
+    weight = torch.cat(parts, dim=0).contiguous()
+    del layer.weight_scale, layer.weight_scale_2
+    layer.weight = Parameter(weight, requires_grad=False)
 
 
 def _input_scale_to_local_experts(
