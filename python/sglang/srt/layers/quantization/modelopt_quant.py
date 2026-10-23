@@ -620,21 +620,19 @@ class ModelOptFp8LinearMethod(LinearMethodBase):
         )
         layer.weight = Parameter(quantized_weight.t(), requires_grad=False)
         layer.use_flashinfer_bmm = self._can_use_flashinfer_bmm(layer)
-        if self.cutlass_fp8_supported and not layer.use_flashinfer_bmm:
-            max_w_scale = convert_to_channelwise(max_w_scale, layer.logical_widths)
-        layer.weight_scale = Parameter(max_w_scale, requires_grad=False)
         layer.input_scale = Parameter(layer.input_scale.max(), requires_grad=False)
-        if (
-            self.use_sm120_fp8
-            and layer.weight_scale.numel() == 1
-            and layer.input_scale.numel() == 1
-        ):
+        # Taken before the channelwise expansion below: requantization leaves one
+        # per-tensor scale, which is all the SM12x facade needs.
+        if self.use_sm120_fp8 and max_w_scale.numel() == 1:
             # Precompute the combined epilogue scale for the SM12x facade.
             layer.sm120_fp8_alpha = (
-                (layer.input_scale.float() * layer.weight_scale.float())
+                (layer.input_scale.float() * max_w_scale.float())
                 .reshape(1)
                 .contiguous()
             )
+        if self.cutlass_fp8_supported and not layer.use_flashinfer_bmm:
+            max_w_scale = convert_to_channelwise(max_w_scale, layer.logical_widths)
+        layer.weight_scale = Parameter(max_w_scale, requires_grad=False)
         if self.use_marlin:
             prepare_fp8_layer_for_marlin(layer)
             # Marlin uses FP8 weights with unquantized activations.

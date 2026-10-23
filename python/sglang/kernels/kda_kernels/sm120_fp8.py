@@ -31,6 +31,15 @@ _KDA_PRODUCTION_SHAPES = frozenset(
 )
 
 
+def _use_kda_skinny_rule(*, m: int, k: int, n: int) -> bool:
+    # Measured on RTX 5090 (cold weights, CUDA graphs), bit-identical to cuBLAS:
+    # the skinny kernel holds ~1.4 TB/s up to M=16 while cuBLAS SM89 tiles drop
+    # to 0.8-0.9 TB/s at M=4-12; above M=16 it re-reads weights per 16-row tile.
+    if k % 256 != 0 or n % 32 != 0:
+        return False
+    return m <= 16 or (m <= 32 and n <= 4096)
+
+
 @functools.cache
 def _device_capability(device: torch.device) -> tuple[int, int]:
     import torch
@@ -119,7 +128,7 @@ def try_sm120_fp8_linear(
     m, k = input.shape
     n = weight.shape[1]
     use_native_gemv = False
-    if m == 1:
+    if m == 1 and (n >= 8192 or capability != (12, 0)):
         from sglang.kernels.ops.gemm.sm120_fp8_gemv import use_sm120_fp8_gemv
 
         use_native_gemv = use_sm120_fp8_gemv(m, n, k)
@@ -127,7 +136,10 @@ def try_sm120_fp8_linear(
     use_kda_gemm = (
         not use_native_gemv
         and capability == (12, 0)
-        and (m, k, n) in _KDA_PRODUCTION_SHAPES
+        and (
+            (m, k, n) in _KDA_PRODUCTION_SHAPES
+            or _use_kda_skinny_rule(m=m, k=k, n=n)
+        )
         and _has_kda_runtime()
     )
     if not use_native_gemv and not use_kda_gemm:

@@ -445,7 +445,7 @@ struct KdaSm120Fp8SkinnyGemm {
     const int m = static_cast<int>(M.unwrap());
     const int k = static_cast<int>(K.unwrap());
     const int n = static_cast<int>(N.unwrap());
-    CHECK_HOST(m == 1 || m == 2 || m == 4 || m == 8 || m == 9) << "M must be one of {1, 2, 4, 8, 9}, got " << m;
+    CHECK_HOST(m >= 1 && m <= 64) << "M must be in [1, 64], got " << m;
     CHECK_HOST(k >= 256 && k % 256 == 0) << "K must be a positive multiple of 256, got " << k;
     CHECK_HOST(n >= 32 && n % 32 == 0) << "N must be a positive multiple of 32, got " << n;
 
