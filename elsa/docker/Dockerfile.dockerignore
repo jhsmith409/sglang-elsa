@@ -1,0 +1,14 @@
+# BuildKit ignore file for elsa/docker/Dockerfile (the repo-root .dockerignore is upstream's).
+# Only rust/, python/, elsa/ and a few files are copied into the image.
+.git
+**/target
+**/__pycache__
+**/*.egg-info
+python/build
+docs
+test
+benchmark
+3rdparty
+sgl-model-gateway
+elsa/elsa.env
+elsa/bench/data

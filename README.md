@@ -1,3 +1,7 @@
+> **Elsa fork:** this repository tunes SGLang for Qwen3.6-35B-A3B NVFP4 on one
+> RTX 5090 (SM120): 256K context, vision, tools, MTP + FR-Spec, ~2x stock decode.
+> See [`elsa/README.md`](elsa/README.md) to build, run and reproduce the benchmarks.
+
 # SGLang: Fast inference for LLMs and multimodal models
 
 <p align="center" id="sglangtop">

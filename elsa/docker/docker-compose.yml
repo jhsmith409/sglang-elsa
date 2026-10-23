@@ -1,0 +1,66 @@
+# Elsa (SGLang fork) serving nvidia/Qwen3.6-35B-A3B-NVFP4 on one RTX 5090 (SM120):
+# 256K context, vision, tool calling, NEXTN MTP + FR-Spec, thinking off by default.
+#
+#   cd elsa/docker
+#   ELSA_GPU=GPU-xxxxxxxx-... MODEL_DIR=/path/to/Qwen3.6-35B-A3B-NVFP4 docker compose up -d --build
+#
+# ELSA_GPU: the RTX 5090's UUID from `nvidia-smi -L` (pinning by UUID survives re-ordering).
+# MODEL_DIR: a complete local checkpoint, including hf_quant_config.json. If it is a
+#   Hugging Face cache snapshot (files symlinked into ../../blobs), also set BLOBS_DIR to the
+#   repo's blobs directory so the links resolve inside the container.
+#
+# CUDA base: 13.3.1 (its nvcc compiles the FlashInfer/SGLang JIT kernels at startup).
+# Measured on RTX 5090, C=1/C=4 aggregate tok/s, 3 warm runs: 13.0.2 520/1300,
+# 13.3.1 559/1329, 13.4.2 542/1310. Changing it needs a fresh cache volume (ELSA_CACHE_VOLUME).
+#
+# This only works on SM120 Blackwell (compute capability 12.0), and the weights do not fit
+# twice on 32 GB: stop any other server on the card first.
+
+services:
+  elsa:
+    build:
+      context: ../..
+      dockerfile: elsa/docker/Dockerfile
+      args:
+        UV_DEFAULT_INDEX: ${UV_DEFAULT_INDEX:-https://pypi.org/simple}
+        CUDA_IMAGE: ${CUDA_IMAGE:-nvidia/cuda:13.3.1-devel-ubuntu24.04}
+    image: elsa-sglang:${ELSA_TAG:-1.1}
+    container_name: elsa-qwen36
+    runtime: nvidia
+    ipc: host
+    ports:
+      - "${ELSA_PORT:-8005}:8000"
+    volumes:
+      - ${MODEL_DIR:?set MODEL_DIR to the local checkpoint}:/model:ro
+      - ${BLOBS_DIR:-./.no-blobs}:/blobs:ro
+      # FlashInfer / Triton / SGLang JIT caches: the first start compiles SM120 kernels for
+      # several minutes; later starts reuse them.
+      - elsa-cache:/root/.cache
+    environment:
+      NVIDIA_VISIBLE_DEVICES: ${ELSA_GPU:?set ELSA_GPU to the RTX 5090 UUID}
+      CUDA_DEVICE_ORDER: "PCI_BUS_ID"
+      GPU: "0"
+      MODEL_PATH: "/model"
+      SERVED_MODEL_NAME: ${SERVED_MODEL_NAME:-qwen3.6-moe-nvfp4}
+      ENABLE_THINKING: ${ENABLE_THINKING:-false}
+      PORT: "8000"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["${ELSA_GPU:?set ELSA_GPU to the RTX 5090 UUID}"]
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 40
+      start_period: 900s                  # first boot JIT-compiles SM120 kernels
+    restart: unless-stopped
+
+volumes:
+  elsa-cache:
+    # The JIT cache is keyed by FlashInfer version and GPU arch, not by nvcc version:
+    # use a fresh volume whenever the CUDA base image changes.
+    name: ${ELSA_CACHE_VOLUME:-elsa-cache-cu133}
