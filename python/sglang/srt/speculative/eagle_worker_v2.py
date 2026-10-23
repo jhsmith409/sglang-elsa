@@ -213,6 +213,12 @@ class EagleDraftWorker(EagleDraftWorkerBase):
 
         # Alias for better readability
         self.draft_runner = self.draft_worker.model_runner
+        # Share embed/lm_head before the scheduler profiles free memory for the
+        # target KV pool; otherwise the draft's private copies are counted as used.
+        self.embed_and_head_shared = get_parallel().pp_size == 1
+        if self.embed_and_head_shared:
+            self.init_token_map()
+            self.init_lm_head()
         self._init_dsa_index_share_state()
         # Eager draft-extend seed buffer (graph paths use their own static ones).
         self.dsa_extend_topk_buf: Optional[torch.Tensor] = None
@@ -234,8 +240,9 @@ class EagleDraftWorker(EagleDraftWorkerBase):
             req_to_token_pool=req_to_token_pool,
             token_to_kv_pool_allocator=token_to_kv_pool_allocator,
         )
-        self.init_token_map()
-        self.init_lm_head()
+        if not self.embed_and_head_shared:
+            self.init_token_map()
+            self.init_lm_head()
 
         if get_spec().speculative_use_rejection_sampling:
             target_vocab_size = self.target_worker.model_config.vocab_size
