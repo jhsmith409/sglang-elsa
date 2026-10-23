@@ -1330,6 +1330,8 @@ class Qwen3_5AttentionDecoderLayer(nn.Module):
             ),
             prefix=f"{prefix}.attn",
             quant_config=quant_config,
+            # Set only on the MTP draft's private config copy (qwen3_5_mtp.py).
+            sliding_window_size=getattr(config, "mtp_draft_sliding_window", -1),
         )
 
         # Dense MLP for non-MoE variant

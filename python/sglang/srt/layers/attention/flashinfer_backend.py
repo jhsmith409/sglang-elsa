@@ -383,6 +383,13 @@ class FlashInferAttnBackend(AttentionBackend):
             and model_runner.model_config.is_encoder_decoder
         ), "Sliding window and cross attention are not supported together"
 
+        # A model may bound only its extend attention (e.g. a Qwen3.5 MTP draft's
+        # prompt pass) while decode stays full; one wrapper, windowed plan.
+        prefill_window_fn = getattr(model_runner.model, "get_attention_prefill_window", None)
+        self.prefill_window_left = prefill_window_fn() if prefill_window_fn else -1
+        # Whether the current extend plan is windowed: only prompt (EXTEND/MIXED)
+        # passes are; a draft's post-verify DRAFT_EXTEND keeps full attention.
+        self.extend_windowed = False
         if model_runner.sliding_window_size is not None:
             self.num_wrappers = 2
             self.dispatch_reason = WrapperDispatch.SLIDING_WINDOW
@@ -725,6 +732,9 @@ class FlashInferAttnBackend(AttentionBackend):
         encoder_lens = forward_batch.encoder_lens
         forward_mode = forward_batch.forward_mode
         spec_info = forward_batch.spec_info
+        # Graph-captured paths (decode, verify, post-verify draft extend) are
+        # never prompt passes; drop a window left over from the last eager extend.
+        self.extend_windowed = False
 
         if (
             spec_info is not None
@@ -1003,6 +1013,9 @@ class FlashInferAttnBackend(AttentionBackend):
             )
         else:
             prefix_lens = forward_batch.extend_prefix_lens
+            self.extend_windowed = self.prefill_window_left >= 0 and (
+                forward_batch.forward_mode in (ForwardMode.EXTEND, ForwardMode.MIXED)
+            )
 
             # Disable ragged wrapper and ensure prefix handling for multimodal and multi-item scoring
             if self.is_multimodal or self.enable_mis:
@@ -1314,6 +1327,13 @@ class FlashInferAttnBackend(AttentionBackend):
         return 1
 
     @debug_kernel_api
+    def _extend_window_left(self, layer) -> int:
+        # A prompt-only window (prefill_window_left) applies when this extend was
+        # planned windowed; model-wide sliding windows always apply.
+        if self.prefill_window_left >= 0 and not self.extend_windowed:
+            return -1
+        return layer.sliding_window_size
+
     def forward_extend(
         self,
         q: torch.Tensor,
@@ -1385,7 +1405,7 @@ class FlashInferAttnBackend(AttentionBackend):
                 #   provide more precise attention control than simple sliding windows
                 # - Item-aware masking takes precedence over window-based masking
                 window_left=(
-                    layer.sliding_window_size
+                    self._extend_window_left(layer)
                     if not (
                         self.forward_metadata.multi_item_params
                         and self.forward_metadata.multi_item_params.is_enabled()
@@ -1432,7 +1452,7 @@ class FlashInferAttnBackend(AttentionBackend):
 
             else:
                 swa_window_left = (
-                    layer.sliding_window_size
+                    self._extend_window_left(layer)
                     if not (
                         self.forward_metadata.multi_item_params
                         and self.forward_metadata.multi_item_params.is_enabled()
@@ -1941,6 +1961,11 @@ class FlashInferIndicesUpdaterPrefill:
             multi_item_params=multi_item_params,
             seq_lens_cpu=seq_lens_cpu,
             custom_kv_indices=custom_kv_indices,
+            window_left=(
+                self.attn_backend.prefill_window_left
+                if self.attn_backend.extend_windowed
+                else -1
+            ),
             plan=plan,
         )
 

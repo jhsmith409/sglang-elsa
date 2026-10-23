@@ -139,6 +139,11 @@ class Qwen3_5ForCausalLMMTP(nn.Module):
         mtp_config = copy.deepcopy(config)
         mtp_config.num_hidden_layers = 1
         mtp_config.full_attention_interval = 1
+        # A window bounds the draft's attention over long prompts (its prefill pass
+        # costs as much attention as one target layer); the target is unaffected.
+        self.draft_window = envs.SGLANG_QWEN35_MTP_DRAFT_WINDOW.get()
+        if self.draft_window > 0:
+            mtp_config.mtp_draft_sliding_window = self.draft_window
         self.model = Qwen3_5ForCausalLM(
             mtp_config,
             quant_config,
@@ -167,6 +172,10 @@ class Qwen3_5ForCausalLMMTP(nn.Module):
             num_logical_experts=text_config.num_experts,
             num_groups=None,
         )
+
+    def get_attention_prefill_window(self) -> int:
+        """window_left for the draft's extend (prompt) attention; -1 is full."""
+        return self.draft_window if self.draft_window > 0 else -1
 
     def get_embed_and_head(self):
         return self.model.embed_tokens.weight, self.lm_head.weight
